@@ -1,0 +1,25 @@
+{
+  "name": "wsgem-cow-hooks",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CoW Swap Hook Store dapp: wrap tGBP into wstGBP after a buy (post-hook) or unwrap wstGBP to fund a tGBP sell (pre-hook), via the owner-bound WsgemHookHelper.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@cowprotocol/hook-dapp-lib": "^2.2.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}
