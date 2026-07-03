@@ -6,11 +6,14 @@ the wstGBP wrapper's atomic mint/redeem to any CoW Swap order on Ethereum mainne
 
 - **Post-hook — "Wrap tGBP → wstGBP":** the order buys tGBP; after settlement the hook wraps the
   proceeds into wstGBP at the protocol's `mintcost` and delivers them to your wallet. The wrap sweeps
-  `min(balance, allowance)`, so order surplus is captured too (that's why the approval carries a small
-  buffer over the order's `buyAmount`).
+  `min(balance, allowance)`, so order surplus is captured too — up to the approval's 2% buffer over
+  the order's `buyAmount`; surplus beyond that stays in your wallet as tGBP. Requires the order's
+  recipient to be your own wallet (custom recipients are blocked in the UI).
 - **Pre-hook — "Unwrap wstGBP → tGBP":** the order sells tGBP you don't hold yet; before settlement the
-  hook redeems enough of your wstGBP at `burncost` to fund the sell. If the hook is skipped (hook
-  execution is solver social consensus, not enforced), the order simply can't settle — nothing is lost.
+  hook redeems enough of your wstGBP at `burncost` to fund the sell. Sell-kind orders only (an exact
+  sell amount is needed to size the redeem; buy-kind orders are blocked in the UI). If the hook is
+  skipped (hook execution is solver social consensus, not enforced), the order simply can't settle —
+  nothing is lost.
 
 ## Trust model
 
@@ -19,7 +22,9 @@ The on-chain target is **`WsgemHookHelper`** (see the Solidity repo, `wstGBP-uni
 (CoW's HooksTrampoline is public and untrusted), but it pulls at most what the owner approved and always
 pays the output back to the owner at the wrapper's oracle price. Worst case for a third-party caller:
 forcing a fair-price conversion of the approved amount, delivered to you (bounded griefing, ~25bps
-round-trip spread; no extraction). Approvals are exact-amount by default.
+round-trip spread; no extraction). Approvals are bounded per order — `buyAmount` +2% for wraps
+(the buffer lets the sweep capture surplus), redeem amount +0.5% for unwraps; any allowance left
+over after settlement stays approved-but-unspent and can be revoked.
 
 ## Addresses (Ethereum mainnet)
 
@@ -35,6 +40,7 @@ round-trip spread; no extraction). Approvals are exact-amount by default.
 npm install
 npm run dev          # http://localhost:5180
 npm run build        # type-check + production build to dist/
+npm test             # unit tests for the hook sizing math (vitest)
 ```
 
 Test against CoW Swap without listing: swap.cow.fi → Hooks tab → **My Custom Hooks** → paste the dapp
@@ -56,8 +62,14 @@ to [`cowprotocol/cowswap`](https://github.com/cowprotocol/cowswap) adding a `typ
 
 ## Notes / v1 limitations
 
-- EOA wallets only (`walletCompatibility: ['EOA']`). Smart-contract wallets re-run post-hooks per fill
-  on partially fillable orders; revisit before enabling.
+- EOA wallets only (`walletCompatibility: ['EOA']`), enforced in-app too via `context.isSmartContract`
+  (registry metadata alone can be bypassed through "My Custom Hooks"). Smart-contract wallets re-run
+  post-hooks per fill on partially fillable orders; revisit before enabling.
+- If an older allowance to the helper exceeds the current order's cap, the post-hook UI requires
+  reducing it to the exact buffered amount before the hook can be added — the sweep would otherwise
+  be entitled to previously held tGBP up to that stale allowance.
 - Mainnet only — tGBP/wstGBP have no testnet deployment, so e2e testing means small real orders.
 - Quotes read `wstGBP.mintcost()`/`burncost()` live via the host's RPC; the oracle ratchets slowly, and
-  `minAmountOut` carries a 0.5% guard (`DEFAULT_SLIPPAGE_BPS` in `src/config.ts`).
+  a 0.5% guard (`DEFAULT_SLIPPAGE_BPS` in `src/config.ts`) is applied on each side: the post-hook puts
+  it on `minAmountOut`, while the pre-hook buffers the redeem *input* by 0.5% and pins `minAmountOut`
+  to the order's exact sell amount (if the redeem can't fund the order, the hook must revert).

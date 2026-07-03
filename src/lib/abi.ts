@@ -1,4 +1,4 @@
-// Minimal ABIs — only what the dapp calls.
+// Minimal ABIs — only what the dapp calls. ERC-20 calls use viem's exported `erc20Abi`.
 
 export const HELPER_ABI = [
   {
@@ -21,36 +21,6 @@ export const HELPER_ABI = [
       { name: 'minAmountOut', type: 'uint256' },
     ],
     outputs: [{ name: 'amountOut', type: 'uint256' }],
-  },
-] as const
-
-export const ERC20_ABI = [
-  {
-    type: 'function',
-    name: 'balanceOf',
-    stateMutability: 'view',
-    inputs: [{ name: 'owner', type: 'address' }],
-    outputs: [{ type: 'uint256' }],
-  },
-  {
-    type: 'function',
-    name: 'allowance',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'spender', type: 'address' },
-    ],
-    outputs: [{ type: 'uint256' }],
-  },
-  {
-    type: 'function',
-    name: 'approve',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ type: 'bool' }],
   },
 ] as const
 

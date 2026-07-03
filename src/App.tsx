@@ -9,6 +9,8 @@ import {
   createWalletClient,
   custom,
   encodeFunctionData,
+  erc20Abi,
+  zeroAddress,
   type Address,
   type EIP1193Provider,
   type PublicClient,
@@ -16,8 +18,9 @@ import {
 } from 'viem'
 import { mainnet } from 'viem/chains'
 
-import { ERC20_ABI, HELPER_ABI, WRAPPER_PRICE_ABI } from './lib/abi'
-import { ceilDiv, fmt, sameAddress } from './lib/format'
+import { HELPER_ABI, WRAPPER_PRICE_ABI } from './lib/abi'
+import { fmt, sameAddress } from './lib/format'
+import { computeUnwrap, computeWrap } from './lib/hookMath'
 import {
   APPROVAL_BUFFER_BPS,
   CHAIN_ID,
@@ -25,13 +28,11 @@ import {
   HOOK_HELPER,
   TGBP,
   UNWRAP_GAS_LIMIT,
-  WAD,
   WRAP_GAS_LIMIT,
   WSTGBP,
 } from './config'
 
-const BPS = 10_000n
-const HELPER_DEPLOYED = HOOK_HELPER !== '0x0000000000000000000000000000000000000000'
+const HELPER_DEPLOYED = HOOK_HELPER !== zeroAddress
 
 interface Chain {
   pub: PublicClient
@@ -45,12 +46,20 @@ export default function App() {
   const [allowance, setAllowance] = useState<bigint | null>(null)
   const [balance, setBalance] = useState<bigint | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Background reads and user-initiated transactions fail independently; keep their surfaces apart
+  // so a successful 30s poll can't wipe an approval error the user still needs to see.
+  const [readError, setReadError] = useState<string | null>(null)
+  const [txError, setTxError] = useState<string | null>(null)
 
   const actionsRef = useRef<CoWHookDappActions | null>(null)
   const chainRef = useRef<Chain | null>(null)
+  const initedRef = useRef(false)
 
   useEffect(() => {
+    // initCoWHookDapp registers an iframe message listener with no teardown API; init exactly once
+    // so StrictMode's dev double-invoke doesn't leave a second live subscription.
+    if (initedRef.current) return
+    initedRef.current = true
     const { actions, provider } = initCoWHookDapp({ onContext: setContext })
     actionsRef.current = actions
     const transport = custom(provider as unknown as EIP1193Provider)
@@ -63,45 +72,55 @@ export default function App() {
   const isPreHook = context?.isPreHook ?? false
   const account = context?.account as Address | undefined
   const order = context?.orderParams ?? null
+  const chainOk = context?.chainId === CHAIN_ID
 
   // Pre-hook = unwrap wstGBP to fund a tGBP sell; post-hook = wrap bought tGBP into wstGBP.
   const inputToken: Address = isPreHook ? WSTGBP : TGBP
 
   const refresh = useCallback(async () => {
     const chain = chainRef.current
-    if (!chain) return
+    if (!chain || !chainOk) return
     try {
-      const [mc, bc] = await Promise.all([
+      const priceReads = [
         chain.pub.readContract({ address: WSTGBP, abi: WRAPPER_PRICE_ABI, functionName: 'mintcost' }),
         chain.pub.readContract({ address: WSTGBP, abi: WRAPPER_PRICE_ABI, functionName: 'burncost' }),
-      ])
+      ]
+      const accountReads =
+        account && HELPER_DEPLOYED
+          ? [
+              chain.pub.readContract({
+                address: inputToken,
+                abi: erc20Abi,
+                functionName: 'allowance',
+                args: [account, HOOK_HELPER],
+              }),
+              chain.pub.readContract({
+                address: inputToken,
+                abi: erc20Abi,
+                functionName: 'balanceOf',
+                args: [account],
+              }),
+            ]
+          : []
+      const [mc, bc, al, bal] = await Promise.all([...priceReads, ...accountReads])
       setMintcost(mc)
       setBurncost(bc)
-      if (account && HELPER_DEPLOYED) {
-        const [al, bal] = await Promise.all([
-          chain.pub.readContract({
-            address: inputToken,
-            abi: ERC20_ABI,
-            functionName: 'allowance',
-            args: [account, HOOK_HELPER],
-          }),
-          chain.pub.readContract({
-            address: inputToken,
-            abi: ERC20_ABI,
-            functionName: 'balanceOf',
-            args: [account],
-          }),
-        ])
+      if (accountReads.length) {
         setAllowance(al)
         setBalance(bal)
       }
-      setError(null)
+      setReadError(null)
     } catch (e) {
-      setError(`RPC read failed: ${(e as Error).message}`)
+      setReadError(`RPC read failed: ${(e as Error).message}`)
     }
-  }, [account, inputToken])
+  }, [account, inputToken, chainOk])
 
   useEffect(() => {
+    // The refresh key (account, inputToken, chain) changed: the cached allowance/balance belong to
+    // the previous key, so drop them before the async re-read — otherwise `approved`/`funded` are
+    // judged against the wrong token or wallet until it lands.
+    setAllowance(null)
+    setBalance(null)
     refresh()
     const t = setInterval(refresh, 30_000)
     return () => clearInterval(t)
@@ -113,59 +132,61 @@ export default function App() {
 
   // --- Derived amounts ---------------------------------------------------------------------------
 
-  // Post-hook (wrap): the order buys tGBP; proceeds >= buyAmount (surplus). We approve a buffered
-  // amount so the helper's min(balance, allowance) sweep captures surplus too, and set minAmountOut
-  // from buyAmount at the live mintcost with a slippage guard.
   const wrap = useMemo(() => {
-    if (isPreHook || !order || !mintcost || mintcost === 0n) return null
+    if (isPreHook || !order || !mintcost) return null
     if (!sameAddress(order.buyTokenAddress, TGBP)) return null
-    const proceeds = BigInt(order.buyAmount)
-    if (proceeds === 0n) return null
-    const expectedOut = (proceeds * WAD) / mintcost
-    const minOut = (expectedOut * (BPS - DEFAULT_SLIPPAGE_BPS)) / BPS
-    const approvalNeeded = (proceeds * (BPS + APPROVAL_BUFFER_BPS)) / BPS
-    return { proceeds, expectedOut, minOut, approvalNeeded }
+    return computeWrap(BigInt(order.buyAmount), mintcost, DEFAULT_SLIPPAGE_BPS, APPROVAL_BUFFER_BPS)
   }, [isPreHook, order, mintcost])
 
-  // Pre-hook (unwrap): the order sells tGBP the user does not hold yet; redeem enough wstGBP to cover
-  // sellAmount at the live burncost, with a slippage buffer on the input. minAmountOut is the sell
-  // amount itself — if the redeem cannot fund the order, the hook (and so the order) must not proceed.
   const unwrap = useMemo(() => {
-    if (!isPreHook || !order || !burncost || burncost === 0n) return null
+    if (!isPreHook || !order || !burncost) return null
     if (!sameAddress(order.sellTokenAddress, TGBP)) return null
-    const needed = BigInt(order.sellAmount)
-    if (needed === 0n) return null
-    const exactIn = ceilDiv(needed * WAD, burncost)
-    const amountIn = (exactIn * (BPS + DEFAULT_SLIPPAGE_BPS)) / BPS
-    return { needed, amountIn, expectedOut: (amountIn * burncost) / WAD }
+    // Buy-kind orders only bound the sell side (sellAmount is a maximum, not the fill), so sizing
+    // the redeem from it would over-convert; the pre-hook needs an exact sell amount.
+    if (order.kind !== 'sell') return null
+    return computeUnwrap(BigInt(order.sellAmount), burncost, DEFAULT_SLIPPAGE_BPS)
   }, [isPreHook, order, burncost])
 
   const active = isPreHook ? unwrap : wrap
   const requiredApproval = isPreHook ? unwrap?.amountIn : wrap?.approvalNeeded
   const approved = allowance !== null && requiredApproval !== undefined && allowance >= requiredApproval
-  const funded =
-    !isPreHook || (balance !== null && unwrap !== undefined && unwrap !== null && balance >= unwrap.amountIn)
+  const funded = !isPreHook || (balance !== null && unwrap !== null && balance >= unwrap.amountIn)
+
+  // wrapAll sweeps min(balance, allowance): an older allowance larger than this order's cap would
+  // let the sweep pull previously held tGBP too. Force it back down before the hook can be added.
+  // (The pre-hook is unaffected — unwrap pulls an explicit amountIn, never the whole allowance.)
+  const overApproved =
+    !isPreHook && wrap !== null && allowance !== null && allowance > wrap.approvalNeeded
+
+  // The post-hook wraps tGBP delivered to the connected wallet; with a custom recipient the proceeds
+  // land elsewhere and the sweep would revert (or grab unrelated funds). Zero/empty receiver means
+  // "deliver to owner" in CoW's order model.
+  const receiverMismatch =
+    !isPreHook &&
+    !!order?.receiver &&
+    !sameAddress(order.receiver, account) &&
+    !sameAddress(order.receiver, zeroAddress)
 
   // --- Actions -----------------------------------------------------------------------------------
 
-  async function onApprove() {
+  async function approveAmount(amount: bigint) {
     const chain = chainRef.current
-    if (!chain || !account || requiredApproval === undefined) return
+    if (!chain || !account) return
     setBusy(true)
-    setError(null)
+    setTxError(null)
     try {
       const hash = await chain.wallet.writeContract({
         address: inputToken,
-        abi: ERC20_ABI,
+        abi: erc20Abi,
         functionName: 'approve',
-        args: [HOOK_HELPER, requiredApproval],
+        args: [HOOK_HELPER, amount],
         account,
         chain: mainnet,
       })
       await chain.pub.waitForTransactionReceipt({ hash })
       await refresh()
     } catch (e) {
-      setError(`Approval failed: ${(e as Error).message}`)
+      setTxError(`Approval failed: ${(e as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -202,7 +223,7 @@ export default function App() {
 
   if (!context) return <main className="card">Connecting to CoW Swap…</main>
 
-  if (context.chainId !== CHAIN_ID) {
+  if (!chainOk) {
     return <Notice>wstGBP lives on Ethereum mainnet — switch network to use this hook.</Notice>
   }
   if (!HELPER_DEPLOYED) {
@@ -211,10 +232,26 @@ export default function App() {
   if (!account) {
     return <Notice>Connect a wallet in CoW Swap to configure this hook.</Notice>
   }
+  if (context.isSmartContract) {
+    return (
+      <Notice>
+        This hook supports EOA wallets only for now — smart-contract wallets re-run post-hooks per
+        fill on partially fillable orders.
+      </Notice>
+    )
+  }
   if (!order) {
     return (
       <Notice>
         Fill in the swap form first: {isPreHook ? 'a sell of tGBP (the pre-hook redeems your wstGBP to fund it)' : 'a buy of tGBP (the post-hook wraps the proceeds into wstGBP)'}.
+      </Notice>
+    )
+  }
+  if (isPreHook && order.kind !== 'sell' && sameAddress(order.sellTokenAddress, TGBP)) {
+    return (
+      <Notice>
+        This pre-hook sizes the redeem from an exact sell amount, but this is a buy-type order (it
+        sells <em>up to</em> a maximum). Switch the order to sell an exact amount of tGBP.
       </Notice>
     )
   }
@@ -227,12 +264,20 @@ export default function App() {
       </Notice>
     )
   }
+  if (receiverMismatch) {
+    return (
+      <Notice>
+        This post-hook wraps tGBP delivered to your own wallet, but the order sends the bought tGBP
+        to a different recipient. Remove the custom recipient to use this hook.
+      </Notice>
+    )
+  }
 
   return (
     <main className="card">
       <h1>{isPreHook ? 'Unwrap wstGBP → tGBP (pre-hook)' : 'Wrap tGBP → wstGBP (post-hook)'}</h1>
 
-      {isPreHook && unwrap ? (
+      {isPreHook && unwrap && (
         <dl>
           <dt>Order sells</dt>
           <dd>{fmt(unwrap.needed)} tGBP</dd>
@@ -249,9 +294,10 @@ export default function App() {
             </>
           )}
         </dl>
-      ) : wrap ? (
+      )}
+      {!isPreHook && wrap && (
         <dl>
-          <dt>Order buys (min, surplus is swept too)</dt>
+          <dt>Order buys (min; surplus is swept up to the approval buffer)</dt>
           <dd>{fmt(wrap.proceeds)} tGBP</dd>
           <dt>Expected wstGBP out</dt>
           <dd>
@@ -260,21 +306,33 @@ export default function App() {
           <dt>Wraps at mintcost</dt>
           <dd>{mintcost ? fmt(mintcost, 6) : '…'} tGBP / wstGBP</dd>
         </dl>
-      ) : null}
+      )}
 
       <p className="fine">
         The helper is owner-bound: it can only pull what you approve and always pays the output back to
         your own address, at the wstGBP protocol&apos;s oracle price.
       </p>
 
-      {error && <p className="error">{error}</p>}
+      {txError && <p className="error">{txError}</p>}
+      {readError && <p className="error">{readError}</p>}
 
       {!approved ? (
-        <button disabled={busy} onClick={onApprove}>
+        <button disabled={busy} onClick={() => requiredApproval !== undefined && approveAmount(requiredApproval)}>
           {busy
             ? 'Approving…'
             : `Approve ${fmt(requiredApproval ?? 0n)} ${isPreHook ? 'wstGBP' : 'tGBP'}`}
         </button>
+      ) : overApproved ? (
+        <>
+          <p className="warn">
+            An existing approval of {fmt(allowance!)} tGBP exceeds this order&apos;s cap. The wrap
+            sweeps min(balance, allowance), so the excess could pull tGBP you already hold — tighten
+            the approval first.
+          </p>
+          <button disabled={busy} onClick={() => approveAmount(wrap!.approvalNeeded)}>
+            {busy ? 'Approving…' : `Reduce approval to ${fmt(wrap!.approvalNeeded)} tGBP`}
+          </button>
+        </>
       ) : (
         <button disabled={busy || !funded} onClick={onAddHook}>
           {context.hookToEdit ? 'Update hook' : 'Add hook'}
