@@ -8,7 +8,6 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
-  encodeFunctionData,
   erc20Abi,
   zeroAddress,
   type Address,
@@ -18,19 +17,10 @@ import {
 } from 'viem'
 import { mainnet } from 'viem/chains'
 
-import { HELPER_ABI, WRAPPER_PRICE_ABI } from './lib/abi'
-import { fmt, sameAddress } from './lib/format'
-import { computeUnwrap, computeWrap } from './lib/hookMath'
-import {
-  APPROVAL_BUFFER_BPS,
-  CHAIN_ID,
-  DEFAULT_SLIPPAGE_BPS,
-  HOOK_HELPER,
-  TGBP,
-  UNWRAP_GAS_LIMIT,
-  WRAP_GAS_LIMIT,
-  WSTGBP,
-} from './config'
+import { WRAPPER_PRICE_ABI } from './lib/abi'
+import { fmt } from './lib/format'
+import { buildUnwrapHook, buildWrapHook, deriveHookState } from './lib/hookState'
+import { CHAIN_ID, DEFAULT_SLIPPAGE_BPS, HOOK_HELPER, TGBP, WSTGBP } from './config'
 
 const HELPER_DEPLOYED = HOOK_HELPER !== zeroAddress
 
@@ -130,44 +120,22 @@ export default function App() {
     document.documentElement.dataset.theme = context?.isDarkMode ? 'dark' : 'light'
   }, [context?.isDarkMode])
 
-  // --- Derived amounts ---------------------------------------------------------------------------
+  // --- Derived amounts (pure — see lib/hookState for the gating rules and their rationale) --------
 
-  const wrap = useMemo(() => {
-    if (isPreHook || !order || !mintcost) return null
-    if (!sameAddress(order.buyTokenAddress, TGBP)) return null
-    return computeWrap(BigInt(order.buyAmount), mintcost, DEFAULT_SLIPPAGE_BPS, APPROVAL_BUFFER_BPS)
-  }, [isPreHook, order, mintcost])
-
-  const unwrap = useMemo(() => {
-    if (!isPreHook || !order || !burncost) return null
-    if (!sameAddress(order.sellTokenAddress, TGBP)) return null
-    // Buy-kind orders only bound the sell side (sellAmount is a maximum, not the fill), so sizing
-    // the redeem from it would over-convert; the pre-hook needs an exact sell amount.
-    if (order.kind !== 'sell') return null
-    return computeUnwrap(BigInt(order.sellAmount), burncost, DEFAULT_SLIPPAGE_BPS)
-  }, [isPreHook, order, burncost])
-
-  const active = isPreHook ? unwrap : wrap
-  const requiredApproval = isPreHook ? unwrap?.amountIn : wrap?.approvalNeeded
-  const approved = allowance !== null && requiredApproval !== undefined && allowance >= requiredApproval
-  const funded = !isPreHook || (balance !== null && unwrap !== null && balance >= unwrap.amountIn)
-
-  // A stale allowance above this order's cap breaks the bounded-per-order approval model on both
-  // sides: wrapAll sweeps min(balance, allowance), so the excess would let the sweep pull previously
-  // held tGBP; and the helper is publicly callable with a caller-supplied amountIn, so an oversized
-  // wstGBP approval lets anyone force-redeem more than this order's unwrap needs. Force it back down
-  // before the hook can be added.
-  const overApproved =
-    allowance !== null && requiredApproval !== undefined && allowance > requiredApproval
-
-  // The post-hook wraps tGBP delivered to the connected wallet; with a custom recipient the proceeds
-  // land elsewhere and the sweep would revert (or grab unrelated funds). Zero/empty receiver means
-  // "deliver to owner" in CoW's order model.
-  const receiverMismatch =
-    !isPreHook &&
-    !!order?.receiver &&
-    !sameAddress(order.receiver, account) &&
-    !sameAddress(order.receiver, zeroAddress)
+  const {
+    wrap,
+    unwrap,
+    active,
+    requiredApproval,
+    approved,
+    funded,
+    overApproved,
+    receiverMismatch,
+    buyKindBlocked,
+  } = useMemo(
+    () => deriveHookState({ isPreHook, order, account, mintcost, burncost, allowance, balance }),
+    [isPreHook, order, account, mintcost, burncost, allowance, balance],
+  )
 
   // --- Actions -----------------------------------------------------------------------------------
 
@@ -197,22 +165,7 @@ export default function App() {
   function onAddHook() {
     const actions = actionsRef.current
     if (!actions || !account) return
-    const callData = isPreHook
-      ? encodeFunctionData({
-          abi: HELPER_ABI,
-          functionName: 'unwrap',
-          args: [account, unwrap!.amountIn, unwrap!.needed],
-        })
-      : encodeFunctionData({
-          abi: HELPER_ABI,
-          functionName: 'wrapAll',
-          args: [account, wrap!.minOut],
-        })
-    const hook = {
-      target: HOOK_HELPER,
-      callData,
-      gasLimit: isPreHook ? UNWRAP_GAS_LIMIT : WRAP_GAS_LIMIT,
-    }
+    const hook = isPreHook ? buildUnwrapHook(account, unwrap!) : buildWrapHook(account, wrap!)
     const hookToEdit = context?.hookToEdit
     if (hookToEdit) {
       actions.editHook({ ...hookToEdit, hook: { ...hookToEdit.hook, ...hook } })
@@ -249,7 +202,7 @@ export default function App() {
       </Notice>
     )
   }
-  if (isPreHook && order.kind !== 'sell' && sameAddress(order.sellTokenAddress, TGBP)) {
+  if (buyKindBlocked) {
     return (
       <Notice>
         This pre-hook sizes the redeem from an exact sell amount, but this is a buy-type order (it

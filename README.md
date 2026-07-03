@@ -40,7 +40,8 @@ over after settlement stays approved-but-unspent and can be revoked.
 npm install
 npm run dev          # http://localhost:5180
 npm run build        # type-check + production build to dist/
-npm test             # unit tests for the hook sizing math (vitest)
+npm test             # unit tests: sizing math + approval/funding/order-shape gating (vitest)
+npm run test:coverage  # same, with a coverage report over src/lib (100% enforced by review, not CI)
 ```
 
 Test against CoW Swap without listing: swap.cow.fi → Hooks tab → **My Custom Hooks** → paste the dapp
