@@ -152,11 +152,13 @@ export default function App() {
   const approved = allowance !== null && requiredApproval !== undefined && allowance >= requiredApproval
   const funded = !isPreHook || (balance !== null && unwrap !== null && balance >= unwrap.amountIn)
 
-  // wrapAll sweeps min(balance, allowance): an older allowance larger than this order's cap would
-  // let the sweep pull previously held tGBP too. Force it back down before the hook can be added.
-  // (The pre-hook is unaffected — unwrap pulls an explicit amountIn, never the whole allowance.)
+  // A stale allowance above this order's cap breaks the bounded-per-order approval model on both
+  // sides: wrapAll sweeps min(balance, allowance), so the excess would let the sweep pull previously
+  // held tGBP; and the helper is publicly callable with a caller-supplied amountIn, so an oversized
+  // wstGBP approval lets anyone force-redeem more than this order's unwrap needs. Force it back down
+  // before the hook can be added.
   const overApproved =
-    !isPreHook && wrap !== null && allowance !== null && allowance > wrap.approvalNeeded
+    allowance !== null && requiredApproval !== undefined && allowance > requiredApproval
 
   // The post-hook wraps tGBP delivered to the connected wallet; with a custom recipient the proceeds
   // land elsewhere and the sweep would revert (or grab unrelated funds). Zero/empty receiver means
@@ -325,12 +327,22 @@ export default function App() {
       ) : overApproved ? (
         <>
           <p className="warn">
-            An existing approval of {fmt(allowance!)} tGBP exceeds this order&apos;s cap. The wrap
-            sweeps min(balance, allowance), so the excess could pull tGBP you already hold — tighten
-            the approval first.
+            {isPreHook ? (
+              <>
+                An existing approval of {fmt(allowance!)} wstGBP exceeds what this order needs. The
+                helper is publicly callable, so anyone could force-redeem the excess to tGBP at the
+                oracle price — tighten the approval first.
+              </>
+            ) : (
+              <>
+                An existing approval of {fmt(allowance!)} tGBP exceeds this order&apos;s cap. The wrap
+                sweeps min(balance, allowance), so the excess could pull tGBP you already hold —
+                tighten the approval first.
+              </>
+            )}
           </p>
-          <button disabled={busy} onClick={() => approveAmount(wrap!.approvalNeeded)}>
-            {busy ? 'Approving…' : `Reduce approval to ${fmt(wrap!.approvalNeeded)} tGBP`}
+          <button disabled={busy} onClick={() => approveAmount(requiredApproval!)}>
+            {busy ? 'Approving…' : `Reduce approval to ${fmt(requiredApproval!)} ${isPreHook ? 'wstGBP' : 'tGBP'}`}
           </button>
         </>
       ) : (

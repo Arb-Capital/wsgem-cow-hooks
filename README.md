@@ -65,9 +65,11 @@ to [`cowprotocol/cowswap`](https://github.com/cowprotocol/cowswap) adding a `typ
 - EOA wallets only (`walletCompatibility: ['EOA']`), enforced in-app too via `context.isSmartContract`
   (registry metadata alone can be bypassed through "My Custom Hooks"). Smart-contract wallets re-run
   post-hooks per fill on partially fillable orders; revisit before enabling.
-- If an older allowance to the helper exceeds the current order's cap, the post-hook UI requires
-  reducing it to the exact buffered amount before the hook can be added — the sweep would otherwise
-  be entitled to previously held tGBP up to that stale allowance.
+- If an older allowance to the helper exceeds the current order's cap, the UI requires reducing it
+  to the exact buffered amount before the hook can be added. For the post-hook the sweep would
+  otherwise be entitled to previously held tGBP up to that stale allowance; for the pre-hook the
+  publicly callable helper would let anyone force-redeem the excess wstGBP (bounded griefing at the
+  oracle price).
 - Mainnet only — tGBP/wstGBP have no testnet deployment, so e2e testing means small real orders.
 - Quotes read `wstGBP.mintcost()`/`burncost()` live via the host's RPC; the oracle ratchets slowly, and
   a 0.5% guard (`DEFAULT_SLIPPAGE_BPS` in `src/config.ts`) is applied on each side: the post-hook puts
