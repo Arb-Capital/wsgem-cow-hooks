@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { WAD } from '../config'
 import { ceilDiv } from './format'
-import { BPS, computeUnwrap, computeWrap } from './hookMath'
+import { BPS, computeUnwrap, computeWrap, WAD } from './hookMath'
 
 // Live values read from wstGBP on mainnet (2026-07-03) — WAD-scaled tGBP-per-wstGBP, mintcost above
 // burncost by the ~25bps spread. The suite uses them so the math is exercised at real oracle scale.

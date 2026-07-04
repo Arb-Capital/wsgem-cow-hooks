@@ -24,7 +24,7 @@ export const HELPER_ABI = [
   },
 ] as const
 
-// Live oracle prices straight off the wrapper (WAD, tGBP-per-wstGBP).
+// Live oracle prices straight off the wrapper (WAD, base-per-wrapped, e.g. tGBP-per-wstGBP).
 export const WRAPPER_PRICE_ABI = [
   { type: 'function', name: 'mintcost', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'burncost', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },

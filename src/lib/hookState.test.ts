@@ -1,17 +1,9 @@
 import { decodeFunctionData, zeroAddress, type Address } from 'viem'
 import { describe, expect, it } from 'vitest'
 
-import {
-  APPROVAL_BUFFER_BPS,
-  DEFAULT_SLIPPAGE_BPS,
-  HOOK_HELPER,
-  TGBP,
-  UNWRAP_GAS_LIMIT,
-  WAD,
-  WRAP_GAS_LIMIT,
-} from '../config'
+import { VENUES } from '../venues'
 import { HELPER_ABI } from './abi'
-import { computeUnwrap, computeWrap } from './hookMath'
+import { computeUnwrap, computeWrap, WAD } from './hookMath'
 import { buildUnwrapHook, buildWrapHook, deriveHookState, type HookInputs } from './hookState'
 
 // Live values read from wstGBP on mainnet (2026-07-03), same as the hookMath suite.
@@ -23,15 +15,20 @@ const BURNCOST = 1002193081588059147n
 const ACCOUNT = '0x1111111111111111111111111111111111111111' as Address
 const OTHER = '0x2222222222222222222222222222222222222222' as Address
 
+// The suites run against the real production venue so they also pin its deployed config.
+const VENUE = VENUES.wstgbp
+const TGBP = VENUE.base.address
+
 const SELL_AMOUNT = 100n * WAD // pre-hook: order sells 100 tGBP
 const BUY_AMOUNT = 100n * WAD // post-hook: order buys 100 tGBP
 
 // The reference sizings the derivation must reproduce (hookMath itself is tested separately).
-const WRAP = computeWrap(BUY_AMOUNT, MINTCOST, DEFAULT_SLIPPAGE_BPS, APPROVAL_BUFFER_BPS)!
-const UNWRAP = computeUnwrap(SELL_AMOUNT, BURNCOST, DEFAULT_SLIPPAGE_BPS)!
+const WRAP = computeWrap(BUY_AMOUNT, MINTCOST, VENUE.slippageBps, VENUE.approvalBufferBps)!
+const UNWRAP = computeUnwrap(SELL_AMOUNT, BURNCOST, VENUE.slippageBps)!
 
 function preHookInputs(over: Partial<HookInputs> = {}, order: Partial<HookInputs['order']> = {}): HookInputs {
   return {
+    venue: VENUE,
     isPreHook: true,
     account: ACCOUNT,
     mintcost: MINTCOST,
@@ -56,6 +53,7 @@ function preHookInputs(over: Partial<HookInputs> = {}, order: Partial<HookInputs
 
 function postHookInputs(over: Partial<HookInputs> = {}, order: Partial<HookInputs['order']> = {}): HookInputs {
   return {
+    venue: VENUE,
     isPreHook: false,
     account: ACCOUNT,
     mintcost: MINTCOST,
@@ -227,18 +225,18 @@ describe('deriveHookState — receiver guard', () => {
 
 describe('buildUnwrapHook / buildWrapHook — encoded payloads', () => {
   it('encodes unwrap(owner, amountIn, needed) with the order-exact minAmountOut', () => {
-    const hook = buildUnwrapHook(ACCOUNT, UNWRAP)
-    expect(hook.target).toBe(HOOK_HELPER)
-    expect(hook.gasLimit).toBe(UNWRAP_GAS_LIMIT)
+    const hook = buildUnwrapHook(VENUE, ACCOUNT, UNWRAP)
+    expect(hook.target).toBe(VENUE.helper)
+    expect(hook.gasLimit).toBe(VENUE.unwrapGasLimit)
     const { functionName, args } = decodeFunctionData({ abi: HELPER_ABI, data: hook.callData })
     expect(functionName).toBe('unwrap')
     expect(args).toEqual([ACCOUNT, UNWRAP.amountIn, SELL_AMOUNT])
   })
 
   it('encodes wrapAll(owner, minAmountOut) with the slippage-guarded minimum', () => {
-    const hook = buildWrapHook(ACCOUNT, WRAP)
-    expect(hook.target).toBe(HOOK_HELPER)
-    expect(hook.gasLimit).toBe(WRAP_GAS_LIMIT)
+    const hook = buildWrapHook(VENUE, ACCOUNT, WRAP)
+    expect(hook.target).toBe(VENUE.helper)
+    expect(hook.gasLimit).toBe(VENUE.wrapGasLimit)
     const { functionName, args } = decodeFunctionData({ abi: HELPER_ABI, data: hook.callData })
     expect(functionName).toBe('wrapAll')
     expect(args).toEqual([ACCOUNT, WRAP.minOut])
@@ -249,7 +247,7 @@ describe('buildUnwrapHook / buildWrapHook — encoded payloads', () => {
     expect(s.approved && s.funded && !s.overApproved).toBe(true)
     const { args } = decodeFunctionData({
       abi: HELPER_ABI,
-      data: buildUnwrapHook(ACCOUNT, s.unwrap!).callData,
+      data: buildUnwrapHook(VENUE, ACCOUNT, s.unwrap!).callData,
     })
     expect(args).toEqual([ACCOUNT, s.requiredApproval, SELL_AMOUNT])
   })
