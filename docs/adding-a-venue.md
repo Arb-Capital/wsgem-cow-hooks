@@ -126,8 +126,9 @@ breaks outside the iframe.
 
 ```bash
 npm test        # config invariants (venues.test.ts) + sizing/gating math
-npm run build   # vite.config.ts cross-checks VENUES ↔ entry HTML ↔ manifest (id format,
-                # id uniqueness, name match, supportedNetworks) and fails with a pointed error
+npm run build   # vite.config.ts cross-checks VENUES ↔ entry HTML ↔ manifest ↔ src/chains.ts
+                # (id format/uniqueness, name match, supportedNetworks, known chain) and fails
+                # with a pointed error
 ```
 
 The same validation runs when the dev server starts, so drift is caught immediately.

@@ -150,6 +150,6 @@ If a future venue breaks one of these, it's a code change with tests, not a conf
 
 | Where | When it runs | What it checks |
 |---|---|---|
-| `vite.config.ts` | `npm run build` and dev-server start | key = slug; entry HTML, manifest, icon exist; manifest id is 64-hex and unique across venues; manifest name matches config; `supportedNetworks` includes `chainId` |
-| `src/venues.test.ts` | `npm test` | address validity/distinctness, chain known to `src/chains.ts`, bps ranges, gas-limit format, symbols, `resolveVenue` routing |
+| `vite.config.ts` | `npm run build` and dev-server start | key = slug; `chainId` has a viem chain in `src/chains.ts`; entry HTML, manifest, icon exist; manifest id is 64-hex and unique across venues; manifest name matches config; `supportedNetworks` includes `chainId` |
+| `src/venues.test.ts` | `npm test` | address validity/distinctness, chain known to `src/chains.ts`, bps ranges, gas-limit format, symbols, `resolveVenue` routing (first-segment only, root deployment) |
 | `src/lib/*.test.ts` | `npm test` | sizing math and gating, run against the real `wstgbp` venue config |

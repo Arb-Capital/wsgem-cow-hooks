@@ -65,17 +65,13 @@ export const VENUES: Record<string, VenueConfig> = {
 }
 
 /**
- * Match a venue from a URL path — the first path segment that names a known slug wins. Null for
- * the root landing page or an unknown path.
- *
- * Scanning all segments makes resolution tolerant of a host-added prefix (/hooks/wstgbp/), but the
- * deployment as a whole is NOT: entry HTML, manifests, and Vite's emitted asset links are all
- * root-absolute (/wstgbp/…, /assets/…). Deploy at the domain root; a prefixed deploy needs a
- * matching Vite `base` plus rewritten manifest/entry-HTML paths.
+ * Match a venue from the first URL path segment (/wstgbp/…). Null for the root landing page or an
+ * unknown path. Strictly first-segment on purpose: the app is only deployable at the domain root
+ * (entry HTML, manifests, and Vite's emitted asset links are all root-absolute), so a prefixed
+ * path like /hooks/wstgbp/ must not resolve — it would render a venue whose assets and manifest
+ * 404. See README "Deploy".
  */
 export function resolveVenue(pathname: string): VenueConfig | null {
-  for (const segment of pathname.split('/')) {
-    if (segment && VENUES[segment]) return VENUES[segment]
-  }
-  return null
+  const first = pathname.split('/').find(Boolean)
+  return (first && VENUES[first]) || null
 }

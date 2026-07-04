@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import { CHAINS } from './src/chains'
 import { VENUES } from './src/venues'
 
 const root = dirname(fileURLToPath(import.meta.url))
@@ -25,6 +26,9 @@ function validateVenues() {
 
     if (key !== venue.slug) fail(`key "${key}" must equal slug "${venue.slug}"`)
     if (!/^[a-z0-9-]+$/.test(venue.slug)) fail(`slug must be lowercase [a-z0-9-]`)
+    if (!CHAINS[venue.chainId]) {
+      fail(`chainId ${venue.chainId} has no viem chain in src/chains.ts — add it there`)
+    }
 
     if (!existsSync(resolve(root, venue.slug, 'index.html'))) {
       fail(`missing entry page ${venue.slug}/index.html`)

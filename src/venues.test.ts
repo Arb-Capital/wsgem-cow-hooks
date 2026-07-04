@@ -66,8 +66,8 @@ describe('resolveVenue', () => {
     expect(resolveVenue('/wstgbp/index.html')?.slug).toBe('wstgbp')
   })
 
-  it('matches a venue under a path prefix', () => {
-    expect(resolveVenue('/hooks/wstgbp/')?.slug).toBe('wstgbp')
+  it('does not match under a path prefix — the app deploys at the domain root only', () => {
+    expect(resolveVenue('/hooks/wstgbp/')).toBeNull()
   })
 
   it('returns null for the root landing and unknown paths', () => {
