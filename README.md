@@ -32,6 +32,20 @@ order — `buyAmount` + buffer for wraps (the buffer lets the sweep capture surp
 + slippage for unwraps; any allowance left over after settlement stays approved-but-unspent and can
 be revoked.
 
+Two dapp-layer caveats, both bounded by the same design:
+
+- **The iframe library trusts whoever embeds it.** `@cowprotocol/hook-dapp-lib` pins its
+  postMessage channel to the *embedding* origin (derived from `ancestorOrigins`/referrer), not to
+  CoW's domains, so a malicious site could iframe a venue and feed it fake order context. It gains
+  nothing beyond the bounded griefing above: the helper target is hardcoded per venue, order
+  amounts are strictly validated before sizing, every transaction still prompts the user's real
+  wallet, and the helper only moves funds owner → owner.
+- **Partial fills.** CoW's hook context doesn't expose `partiallyFillable`, so the dapp can't
+  block partially fillable orders. The failure mode is benign (HooksTrampoline swallows hook
+  failures): the pre-hook redeems the full sell amount on the first fill and later fills' redeems
+  no-op on the spent allowance; the post-hook may skip wrapping a partial fill whose proceeds sit
+  below `minAmountOut` — those proceeds stay in your wallet unwrapped.
+
 ## Venues
 
 | Venue | Path | Chain | Base | Wrapped | Helper |
@@ -78,6 +92,15 @@ venue's `manifest.json` must be served at `/<slug>/manifest.json` (CoW Swap fetc
 `<registered URL>/manifest.json`). After the first deploy, replace each venue's relative
 `"image"` in `public/<slug>/manifest.json` with the absolute deployed URL of its icon. All venues
 deploy together — one build, one host.
+
+Two host requirements (`vercel.json` in the repo covers both for Vercel; port the same rules to
+any other host):
+
+- **CORS on the manifest and icon**: CoW Swap fetches `/<slug>/manifest.json` cross-origin from
+  the browser when the dapp is registered, so it (and the icon it points at) must be served with
+  `Access-Control-Allow-Origin: *` — the dev server sets the same header for local testing.
+- **Stay frameable**: don't send `X-Frame-Options` or a CSP `frame-ancestors` that blocks
+  `swap.cow.fi` — the dapp only runs inside CoW Swap's iframe.
 
 **Deploy at the domain root.** Entry pages, manifests, and built assets all use root-absolute URLs
 (`/<slug>/…`, `/assets/…`), so `https://<domain>/wstgbp/` works but

@@ -27,6 +27,12 @@ interface Chain {
   wallet: WalletClient
 }
 
+// viem errors carry a one-line `shortMessage`; the full `message` embeds the whole request body.
+function errMsg(e: unknown): string {
+  const err = e as { shortMessage?: string; message?: string }
+  return err.shortMessage ?? err.message ?? String(e)
+}
+
 export default function App({ venue }: { venue: VenueConfig }) {
   const [context, setContext] = useState<HookDappContext | null>(null)
   const [mintcost, setMintcost] = useState<bigint | null>(null)
@@ -104,7 +110,7 @@ export default function App({ venue }: { venue: VenueConfig }) {
       }
       setReadError(null)
     } catch (e) {
-      setReadError(`RPC read failed: ${(e as Error).message}`)
+      setReadError(`RPC read failed: ${errMsg(e)}`)
     }
   }, [account, inputToken, chainOk, wrapped.address, venue.helper, helperDeployed])
 
@@ -159,7 +165,7 @@ export default function App({ venue }: { venue: VenueConfig }) {
       await chain.pub.waitForTransactionReceipt({ hash })
       await refresh()
     } catch (e) {
-      setTxError(`Approval failed: ${(e as Error).message}`)
+      setTxError(`Approval failed: ${errMsg(e)}`)
     } finally {
       setBusy(false)
     }
@@ -300,8 +306,18 @@ export default function App({ venue }: { venue: VenueConfig }) {
       {readError && <p className="error">{readError}</p>}
 
       {!approved ? (
-        <button disabled={busy} onClick={() => requiredApproval !== undefined && approveAmount(requiredApproval)}>
-          {busy ? 'Approving…' : `Approve ${fmt(requiredApproval ?? 0n)} ${inputSymbol}`}
+        // allowance === null means the read is still in flight (or failed — readError shows) — an
+        // enabled button here would invite a redundant approval of an allowance that may already
+        // be sufficient.
+        <button
+          disabled={busy || allowance === null}
+          onClick={() => requiredApproval !== undefined && approveAmount(requiredApproval)}
+        >
+          {allowance === null
+            ? 'Checking allowance…'
+            : busy
+              ? 'Approving…'
+              : `Approve ${fmt(requiredApproval ?? 0n)} ${inputSymbol}`}
         </button>
       ) : overApproved ? (
         <>

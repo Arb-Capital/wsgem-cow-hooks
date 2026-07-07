@@ -4,6 +4,25 @@ import App from './App'
 import { resolveVenue, VENUES } from './venues'
 import './styles.css'
 
+// The dapp renders inside CoW Swap's iframe — an unhandled render error would otherwise leave a
+// silent blank frame with no console the user can see.
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <main className="card">
+          <p>Something went wrong — reload the page to try again.</p>
+        </main>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // Each venue is its own hook dapp at /<slug>/ — the path picks the config. The root (and any
 // unknown path) renders the venue directory, which doubles as the landing page.
 const venue = resolveVenue(window.location.pathname)
@@ -11,7 +30,9 @@ const venue = resolveVenue(window.location.pathname)
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {venue ? (
-      <App venue={venue} />
+      <ErrorBoundary>
+        <App venue={venue} />
+      </ErrorBoundary>
     ) : (
       <main className="card">
         <h1>wsgem CoW hooks</h1>

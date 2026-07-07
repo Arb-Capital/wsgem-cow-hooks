@@ -128,6 +128,16 @@ describe('deriveHookState — post-hook (wrap) sizing and guards', () => {
     expect(at(WRAP.approvalNeeded + 1n).overApproved).toBe(true)
   })
 
+  it('derives inactive (never throws) for malformed parent-supplied buyAmount strings', () => {
+    // orderParams comes from the embedding window over postMessage — a hostile embedder or a CoW
+    // regression must degrade to "inactive", not crash the render.
+    for (const buyAmount of ['', ' ', 'abc', '-5', '1.5', '0x10', '1e18', String(BUY_AMOUNT) + 'n']) {
+      const s = deriveHookState(postHookInputs({}, { buyAmount }))
+      expect(s.wrap).toBeNull()
+      expect(s.active).toBeNull()
+    }
+  })
+
   it('is always funded — the wrap sweeps whatever settlement delivers', () => {
     expect(deriveHookState(postHookInputs({ balance: null })).funded).toBe(true)
     expect(deriveHookState(postHookInputs({ balance: 0n })).funded).toBe(true)
@@ -169,6 +179,15 @@ describe('deriveHookState — pre-hook (unwrap) sizing and guards', () => {
     expect(deriveHookState(preHookInputs({ burncost: null })).active).toBeNull()
     expect(deriveHookState(preHookInputs({ burncost: 0n })).active).toBeNull()
     expect(deriveHookState(preHookInputs({}, { sellAmount: '0' })).active).toBeNull()
+  })
+
+  it('derives inactive (never throws) for malformed parent-supplied sellAmount strings', () => {
+    for (const sellAmount of ['', ' ', 'abc', '-5', '1.5', '0x10', '1e18']) {
+      const s = deriveHookState(preHookInputs({}, { sellAmount }))
+      expect(s.unwrap).toBeNull()
+      expect(s.active).toBeNull()
+      expect(s.funded).toBe(false)
+    }
   })
 
   it('gates approval exactly at the buffered redeem input', () => {

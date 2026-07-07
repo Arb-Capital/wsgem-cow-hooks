@@ -16,6 +16,12 @@ export interface OrderShape {
   receiver?: string | null
 }
 
+/** Decimal string → bigint; null (never throws) for malformed parent-supplied amounts. Strict
+ *  base-10 on purpose — `BigInt()` would accept '' (as 0) and '0x…' (as hex). */
+function toBigInt(s: string): bigint | null {
+  return /^[0-9]+$/.test(s) ? BigInt(s) : null
+}
+
 export interface HookInputs {
   venue: VenueConfig
   isPreHook: boolean
@@ -43,18 +49,23 @@ export function deriveHookState({
 }: HookInputs) {
   const base = venue.base.address
 
+  // Order amounts arrive as parent-supplied strings; a malformed one derives "inactive" rather
+  // than throwing out of the render.
+  const buyAmount = order ? toBigInt(order.buyAmount) : null
+  const sellAmount = order ? toBigInt(order.sellAmount) : null
+
   // Pre-hook = unwrap the wrapped token to fund a base-token sell; post-hook = wrap bought base
   // tokens into the wrapped token.
   const wrap =
-    !isPreHook && order && mintcost && sameAddress(order.buyTokenAddress, base)
-      ? computeWrap(BigInt(order.buyAmount), mintcost, venue.slippageBps, venue.approvalBufferBps)
+    !isPreHook && buyAmount !== null && mintcost && order && sameAddress(order.buyTokenAddress, base)
+      ? computeWrap(buyAmount, mintcost, venue.slippageBps, venue.approvalBufferBps)
       : null
 
   // Buy-kind orders only bound the sell side (sellAmount is a maximum, not the fill), so sizing
   // the redeem from it would over-convert; the pre-hook needs an exact sell amount.
   const unwrap =
-    isPreHook && order && burncost && sameAddress(order.sellTokenAddress, base) && order.kind === 'sell'
-      ? computeUnwrap(BigInt(order.sellAmount), burncost, venue.slippageBps)
+    isPreHook && sellAmount !== null && burncost && order && sameAddress(order.sellTokenAddress, base) && order.kind === 'sell'
+      ? computeUnwrap(sellAmount, burncost, venue.slippageBps)
       : null
 
   // A pre-hook order that sells the base token but is buy-kind gets its own explanation in the UI
